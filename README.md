@@ -40,7 +40,7 @@ make_tiles(
    tile_size=960, # (default: 960)
    padding=20, # Overlap tiles by given value (default: 32),
    threshold=5, # Omit labels at the edged if smaller than given value (default: 10),
-   save_empty: # Keep tiles without labels (default: False)
+   save_empty=False# Keep tiles without labels (default: False)
 )
 ```
 
