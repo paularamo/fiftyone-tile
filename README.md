@@ -11,7 +11,7 @@ Tested with with bounding boxes (without orientation) only.
    - Omit labels at image's borders if the don't reach in the image by `threshold` value (in pixels)
 4. If `save_empty` is set, tiles without detections will be kept, if not omited.
 
-<img src="screenshot.png" width="280">
+<img src="screenshot.png">
 
 ## Installation
 [Make sure OpenCV is installed](https://docs.opencv.org/4.x/da/df6/tutorial_py_table_of_contents_setup.html)
@@ -43,3 +43,8 @@ make_tiles(
    save_empty: # Keep tiles without labels (default: False)
 )
 ```
+
+## Sources
+Powered by code of these repos:
+- [WALDO](https://github.com/stephansturges/WALDO/blob/master/playground/run_local_network_on_images_onnxruntime.py#L54)
+- [yolo-tiling](https://github.com/slanj/yolo-tiling/blob/main/tile_yolo.py)
