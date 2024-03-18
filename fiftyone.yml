@@ -1,0 +1,8 @@
+fiftyone:
+  version: ">=0.23.5"
+name: "@mmoollllee/tile"
+version: "0.0.1"
+description: "Tile your images to squares (e.g. 960x960 pixels) in FiftyOne without exporting and re-importing."
+url: "https://github.com/mmoollllee/fiftyone-tile"
+operators:
+  - make_tiles
