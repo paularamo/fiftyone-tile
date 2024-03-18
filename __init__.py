@@ -196,7 +196,7 @@ class MakeTiles(foo.Operator):
         labels_field = ctx.params.get("labels_field")
         if not save_empty:
             if labels_field:
-                view.match(F(labels_field+".detections").length())
+                view = view.match(F(labels_field+".detections").length())
             else:
                 view = []
 
@@ -211,7 +211,7 @@ class MakeTiles(foo.Operator):
             filepath = sample['filepath']
             print(filepath)
 
-            if labels_field and not save_empty and not sample.has_field(labels_field):
+            if labels_field and not save_empty and not sample[labels_field]:
                 print(f"  No {labels_field} detections found: Skiping")
                 continue
             
@@ -220,7 +220,7 @@ class MakeTiles(foo.Operator):
             if resize:
                 image = image_resize(image, width=resize)
             
-            if labels_field and sample.has_field(labels_field):
+            if labels_field and sample[labels_field]:
                 print("  Tiling...")
                 labels = sample[labels_field].detections
             else:
