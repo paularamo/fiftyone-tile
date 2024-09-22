@@ -22,7 +22,7 @@ Otherwise use `tiled` field of detections where `1` means detection is not split
 ## Installation
 [Make sure OpenCV is installed](https://docs.opencv.org/4.x/da/df6/tutorial_py_table_of_contents_setup.html)
 ```shell
-fiftyone plugins download https://github.com/mmoollllee/fiftyone-timestamps/
+fiftyone plugins download https://github.com/mmoollllee/fiftyone-tile/
 ```
 
 ## Python SDK
