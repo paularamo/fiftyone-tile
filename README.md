@@ -1,10 +1,16 @@
-# FiftyOne Timestamps
+# FiftyOne Tile
 
-Tile your images to squares (e.g. 960x960 pixels) in FiftyOne without exporting and re-importing.
+Tile your images to squares (e.g. 960x960 pixels) in FiftyOne directly.
 Tested with with bounding boxes (without orientation) only.
 
+Tiles will be saved to `destination`-dataset.
+As detections might be split over tiles boundaries, they might need refinement.
+`tiled` label tag marks affected detections.
+Otherwise use `tiled` field of detections where `1` means detection is not split and `0.1` means detection is visible only by 10% on this tile:
+`dataset.filter_labels("ground_truth", F("tiled") < 0.95)`
+
 ## Walkthrough
-1. If `resize` is set: Resize image to given width and keep aspect ratio
+1. If `resize` is set: Resize image to given width and keep aspect ratio before tileing
 2. Add space around the image to make it a multiple of tiles size and place image in a random within the new boundaries.
 3. Make tiles with the given `tile_size` and transfer available detections to the tiles.
    - Overlap tiles by `padding` value (in pixels)
@@ -39,8 +45,9 @@ make_tiles(
    resize=1200, # resize the image before tiling (default: None)
    tile_size=960, # (default: 960)
    padding=20, # Overlap tiles by given value (default: 32),
-   threshold=5, # Omit labels at the edged if smaller than given value (default: 10),
-   save_empty=False# Keep tiles without labels (default: False)
+   threshold=0.15, # Omit labels at the edged if smaller than given percentage (default: 0.15),
+   save_empty=False # Keep tiles without labels (default: False),
+   test=False # Run Tiling only for 5 samples and make destination dataset non-persistent
 )
 ```
 

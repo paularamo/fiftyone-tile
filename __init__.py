@@ -45,87 +45,95 @@ def image_resize(image, width = None, height = None, inter = cv2.INTER_AREA):
     return resized
 
 
-def save_tile(padded_image, y, x, tile_size, padding, name, ext, output_dir):
+def save_tile(padded_image, y, x, tile_size, padding, name, id, ext, output_dir):
     tiled = padded_image[
             y*tile_size:(y+1)*tile_size+padding, #0 : 960
             x*tile_size:(x+1)*tile_size+padding #0 : 960
         ]
-    tile_name = name.replace(ext, f'_tiled_{y}_{x}{ext}')
+    tile_name = name.replace(ext, f'_{id}_{y}_{x}{ext}')
     tile_path = os.path.join(output_dir, tile_name)
     cv2.imwrite(tile_path, tiled)
     return tile_path
 
-def tile(image, name, detections, output_dir, target: Dataset, save_empty=False, tile_size=960, padding=0, threshold=0, labels_field="ground_truth"):
+def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_empty=False, tile_size=960, padding=0, threshold=0.15, labels_field="ground_truth"):
     ext = os.path.splitext(name)[-1]
     height, width, channels = image.shape
-    tile_size = tile_size - padding #920px
+    tile_size = tile_size - padding #928px
 
     df_list = []
     for detection in detections:
         x, y, w, h = detection.bounding_box
-        df_list.append([detection.label, x*width, y*height, w*width, h*height])
-    labels = pd.DataFrame(df_list, columns=['label','x1','y1','w','h'])
+        df_list.append([detection, x*width, y*height, w*width, h*height])
+    detections = pd.DataFrame(df_list, columns=['detection','x1','y1','w','h'])
 
     # Calculate the number of tiles needed in each dimension
-    num_tiles_x = math.ceil(width / tile_size) #5
-    num_tiles_y = math.ceil(height / tile_size) #4
+    num_tiles_x = math.ceil(width / tile_size) #3
+    num_tiles_y = math.ceil(height / tile_size) #3
 
     # Pad the image to ensure it's divisible by the tile size
-    padded_width = tile_size * num_tiles_x + padding #4.640px
-    padded_height = tile_size * num_tiles_y + padding #3.720px
+    padded_width = tile_size * num_tiles_x + padding #2.816px
+    padded_height = tile_size * num_tiles_y + padding #2.816px
 
     # Randomize position on padded area
-    padded_x = random.randint(0, padded_width - width) # 0 - 480px
-    padded_y = random.randint(0, padded_height - height) # 0 - 600px
+    padded_x = random.randint(0, padded_width - width) # 0 - 316px
+    padded_y = random.randint(0, padded_height - height) # 0 - 942px
 
     color = (144,144,144)
     padded_image = np.full((padded_height,padded_width, channels), color, dtype=np.uint8)
-    padded_image[padded_y:padded_y+height, 
-       padded_x:padded_x+width] = image
+    padded_image[padded_y:padded_y+height, padded_x:padded_x+width] = image
     
     # rescale coordinates with padding
-    labels[['x1']] = labels[['x1']] + padded_x
-    labels[['y1']] = labels[['y1']] + padded_y
+    detections[['x1']] = detections[['x1']] + padded_x
+    detections[['y1']] = detections[['y1']] + padded_y
 
-    # convert bounding boxes to shapely polygons. We need to invert Y and find polygon vertices from center points
+    # convert bounding boxes to shapely polygons.
     boxes = []
-    for row in labels.iterrows():
+    for row in detections.iterrows():
         i = row[1]
         x1 = i['x1']
         x2 = i['x1'] + i['w']
         y1 = (padded_height - i['y1']) - i['h']
         y2 = padded_height - i['y1']
-        boxes.append((i['label'], Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])))
+        boxes.append((i['detection'], Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])))
 
     counter = 0
     for y in range(num_tiles_y):
         for x in range(num_tiles_x):
             # Coordinates of the tile
-            tile_x1 = x*tile_size #0, 920, 1840,...
-            tile_x2 = ((x+1)*tile_size) + padding #959, 1879, 2.799,...
-            tile_y1 = padded_height - (y*tile_size) #3.720, 2.800, 1.880,...
-            tile_y2 = (padded_height - (y+1)*tile_size) - padding #2.761, 1.1841, 921,...
+            tile_x1 = x*tile_size #0, 928, 1856
+            tile_x2 = ((x+1)*tile_size) + padding #960, 1888, 2.816,...
+            tile_y1 = padded_height - (y*tile_size) #2.816, 1.888, 960
+            tile_y2 = (padded_height - (y+1)*tile_size) - padding #1856, 928, 0
             tile_pol = Polygon([(tile_x1, tile_y1), (tile_x2, tile_y1), (tile_x2, tile_y2), (tile_x1, tile_y2)])
 
-            # Ignore bounding boxes by defined threshold
-            boxes_x1 = tile_x1 + threshold
-            boxes_x2 = tile_x2 - threshold
-            boxes_y1 = tile_y1 - threshold
-            boxes_y2 = tile_y2 + threshold
-            boxes_pol = Polygon([(boxes_x1, boxes_y1), (boxes_x2, boxes_y1), (boxes_x2, boxes_y2), (boxes_x1, boxes_y2)])
-
             imsaved = False
-            tile_labels = []
+            tile_detections = []
 
             for box in boxes:
-                if boxes_pol.intersects(box[1]):
-                    inter = tile_pol.intersection(box[1])
+                bbox = box[1]
+                if tile_pol.intersects(bbox):
+                    inter = tile_pol.intersection(bbox)
+                    intersection = inter.area / bbox.area
+
+                    # Remove box if intersection is below threshold
+                    if intersection < threshold:
+                        continue
+
+                    # hacky copy of detection with all attributes, tags,...
+                    detection = box[0].fancy_repr(class_name=None,exclude_fields=['id'])[12:-1]
+                    detection = eval(detection)
+                    detection = fo.Detection(**detection)
+
+                    # add informations about if the detection was intersecting with the tiles boundaries
+                    detection.set_field("tiled", intersection)
+                    if intersection < 1:
+                        detection.tags.append("tiled")
                     
                     if not imsaved:
-                        tile_path = save_tile(padded_image, y, x, tile_size, padding, name, ext, output_dir)
+                        tile_path = save_tile(padded_image, y, x, tile_size, padding, name, id, ext, output_dir)
                         imsaved = True
                     
-                    # get smallest rectangular polygon (with sides parallel to the coordinate axes) that contains the intersection
+                    # get smallest rectangular polygon  that contains the intersection
                     new_box = inter.envelope 
                     
                     # get central point for the new bounding box 
@@ -144,18 +152,22 @@ def tile(image, name, detections, output_dir, target: Dataset, save_empty=False,
                     
                     counter += 1
 
-                    tile_labels.append(fo.Detection(label=box[0], bounding_box=[new_x, new_y, new_width, new_height]))
+                    detection.bounding_box = [new_x, new_y, new_width, new_height]
+
+                    tile_detections.append(detection)
             
             if not imsaved and save_empty:
-                tile_path = save_tile(padded_image, y, x, tile_size, padding, name, ext, output_dir)
+                tile_path = save_tile(padded_image, y, x, tile_size, padding, name, id, ext, output_dir)
                 imsaved = True
 
             if imsaved:
                 sample = fo.Sample(filepath=tile_path)
-                if len(tile_labels) > 0:
+                if len(tile_detections) > 0:
                     sample[labels_field] = fo.Detections(
-                        detections=tile_labels
+                        detections=tile_detections
                     )
+                for tag in tags:
+                    sample.tags.append(tag)
                 target.add_sample(sample)
 
 
@@ -182,14 +194,16 @@ class MakeTiles(foo.Operator):
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
+        test = ctx.params.get("test")
+
         destination = ctx.params.get("destination") if ctx.params.get("destination") else ctx.dataset.name + "_tiled"
         try:
             tiled_dataset = fo.load_dataset(destination)
             print(f"Destination dataset loaded: {destination}")
         except BaseException:
             tiled_dataset = fo.Dataset(destination)
-            tiled_dataset.persistent = True
-            print(f"Destination dataset created (persistent): {destination}")
+            tiled_dataset.persistent = False if test else True
+            print(f"Destination dataset created (persistent={tiled_dataset.persistent}): {destination}")
 
         save_empty = ctx.params.get("save_empty")
 
@@ -199,6 +213,9 @@ class MakeTiles(foo.Operator):
                 view = view.match(F(labels_field+".detections").length())
             else:
                 view = []
+
+        if test:
+            view = view.head(5)
 
         resize = ctx.params.get("resize")
         tile_size = ctx.params.get("tile_size")
@@ -227,7 +244,7 @@ class MakeTiles(foo.Operator):
                 print(f"  No {labels_field} detections found: Tiling anyway.")
                 labels = None
 
-            tile(image, os.path.basename(filepath), labels, output_dir, target=tiled_dataset, tile_size=tile_size, padding=padding, threshold=threshold, save_empty=save_empty, labels_field=labels_field)
+            tile(image, sample.tags, os.path.basename(filepath), sample['id'], labels, output_dir, target=tiled_dataset, tile_size=tile_size, padding=padding, threshold=threshold, save_empty=save_empty, labels_field=labels_field)
 
     def __call__(
         self, 
@@ -238,8 +255,9 @@ class MakeTiles(foo.Operator):
         resize: Optional[int] = None,
         tile_size: int = 960,
         padding: int = 32,
-        threshold: int = 10,
-        save_empty: bool = False
+        threshold: float = 0.15,
+        save_empty: bool = False,
+        test: bool = False
     ):
         ctx = dict(view=sample_collection.view())
         params = dict(
@@ -251,7 +269,8 @@ class MakeTiles(foo.Operator):
             tile_size=tile_size,
             padding=padding,
             threshold=threshold,
-            save_empty=save_empty
+            save_empty=save_empty,
+            test=test
             )
         return foo.execute_operator(self.uri, ctx, params=params)
 
