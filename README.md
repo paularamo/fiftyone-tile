@@ -16,6 +16,7 @@ Otherwise use `tiled` field of detections where `1` means detection is not split
    - Overlap tiles by `padding` value (in pixels)
    - Omit labels at image's borders if the don't reach in the image by `threshold` value (in pixels)
 4. If `save_empty` is set, tiles without detections will be kept, if not omited.
+5. If `runs` is > 1: repeat those steps n times and keep those with least detections being split by tileing.
 
 <img src="screenshot.png">
 
@@ -47,7 +48,8 @@ make_tiles(
    padding=20, # Overlap tiles by given value (default: 32),
    threshold=0.15, # Omit labels at the edged if smaller than given percentage (default: 0.15),
    save_empty=False # Keep tiles without labels (default: False),
-   test=False # Run Tiling only for 5 samples and make destination dataset non-persistent
+   test=False # Run Tiling only for 5 samples and make destination dataset non-persistent,
+   runs=1 # repeat n times and keep only those with least detections being split by tileing.
 )
 ```
 
