@@ -62,11 +62,11 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
     height, width, channels = image.shape
     tile_size = tile_size - padding #928px
 
-    df_list = []
+    temp = []
     for detection in detections:
         x, y, w, h = detection.bounding_box
-        df_list.append([detection, x*width, y*height, w*width, h*height])
-    detections = pd.DataFrame(df_list, columns=['detection','x1','y1','w','h'])
+        temp.append([detection, x*width, y*height, w*width, h*height])
+    detections = pd.DataFrame(temp, columns=['detection','x1','y1','w','h'])
 
     # Calculate the number of tiles needed in each dimension
     num_tiles_x = math.ceil(width / tile_size) #3
@@ -76,23 +76,24 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
     padded_width = tile_size * num_tiles_x + padding #2.816px
     padded_height = tile_size * num_tiles_y + padding #2.816px
 
+    # color for padding / background
     color = (144,144,144)
 
-    runs_no = range(runs)
+    runs_count = range(runs)
     runs = []
 
-    for run in runs_no:
-        # keep track of intersections
+    for run in runs_count:
+        # prepare run's data
         runs.append({
             "intersections": [],
             "samples": [],
-            "below_threshold": 0
+            "below_threshold": 0,
+            "detections_count": 0
         })
 
         # Randomize position on padded area
         padded_x = random.randint(0, padded_width - width) # 0 - 316px
         padded_y = random.randint(0, padded_height - height) # 0 - 942px
-
         padded_image = np.full((padded_height,padded_width, channels), color, dtype=np.uint8)
         padded_image[padded_y:padded_y+height, padded_x:padded_x+width] = image
         
@@ -111,7 +112,6 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
             y2 = padded_height - i['y1']
             boxes.append((i['detection'], Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])))
 
-        counter = 0
         for y in range(num_tiles_y):
             for x in range(num_tiles_x):
                 # Coordinates of the tile
@@ -119,15 +119,16 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
                 tile_x2 = ((x+1)*tile_size) + padding #960, 1888, 2.816,...
                 tile_y1 = padded_height - (y*tile_size) #2.816, 1.888, 960
                 tile_y2 = (padded_height - (y+1)*tile_size) - padding #1856, 928, 0
-                tile_pol = Polygon([(tile_x1, tile_y1), (tile_x2, tile_y1), (tile_x2, tile_y2), (tile_x1, tile_y2)])
+                tile_box = Polygon([(tile_x1, tile_y1), (tile_x2, tile_y1), (tile_x2, tile_y2), (tile_x1, tile_y2)])
 
                 imsaved = False
                 tile_detections = []
+                tile_intersections = []
 
                 for box in boxes:
                     bbox = box[1]
-                    if tile_pol.intersects(bbox):
-                        inter = tile_pol.intersection(bbox)
+                    if tile_box.intersects(bbox):
+                        inter = tile_box.intersection(bbox)
                         intersection = inter.area / bbox.area
 
                         # Remove box if intersection is below threshold
@@ -141,16 +142,17 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
                         detection = fo.Detection(**detection)
 
                         # add informations about if the detection was intersecting with the tiles boundaries
-                        runs[run]["intersections"].append(intersection)
-                        detection.set_field("tiled", intersection)
+                        tile_intersections.append(intersection)
+                        detection.set_field("intersection", intersection)
                         if intersection < 1:
-                            detection.tags.append("tiled")
+                            detection.tags.append("intersecting")
                         
-                        tile_path = save_tile(padded_image, run, y, x, tile_size, padding, name, id, ext, output_dir)
-                        imsaved = True
+                        if not imsaved:
+                            tile_path = save_tile(padded_image, run, y, x, tile_size, padding, name, id, ext, output_dir)
+                            imsaved = True
                         
                         # get smallest rectangular polygon  that contains the intersection
-                        new_box = inter.envelope 
+                        new_box = inter.envelope
                         
                         # get central point for the new bounding box 
                         centre = new_box.centroid
@@ -166,7 +168,7 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
                         new_x = (centre.coords.xy[0][0] - tile_x1) / (tile_size+padding) - (new_width/2)
                         new_y = (tile_y1 - centre.coords.xy[1][0]) / (tile_size+padding) - (new_height/2)
                         
-                        counter += 1
+                        runs[run]["detections_count"] += 1
 
                         detection.bounding_box = [new_x, new_y, new_width, new_height]
 
@@ -177,6 +179,8 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
                     imsaved = True
 
                 if imsaved:
+                    runs[run]["intersections"].extend(tile_intersections)
+
                     sample = fo.Sample(filepath=tile_path)
                     if len(tile_detections) > 0:
                         sample[labels_field] = fo.Detections(
@@ -184,6 +188,8 @@ def tile(image, tags, name, id, detections, output_dir, target: Dataset, save_em
                         )
                     for tag in tags:
                         sample.tags.append(tag)
+
+                    sample["intersection"] = sum(tile_intersections) / len(tile_intersections)
 
                     runs[run]["samples"].append(sample)
 
@@ -226,21 +232,27 @@ class MakeTiles(foo.Operator):
         if view is None:
             view = ctx.dataset
 
+        log_level = ctx.params.get("log_level")
+
         output_dir = ctx.params.get("output_dir")
         # Ensure output directory exists
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
+            if log_level >= 3:
+                print(f"\tOutput directory created: " + output_dir)
 
         test = ctx.params.get("test")
 
         destination = ctx.params.get("destination") if ctx.params.get("destination") else ctx.dataset.name + "_tiled"
         try:
             tiled_dataset = fo.load_dataset(destination)
-            print(f"Destination dataset loaded: {destination}")
+            if log_level >= 2:
+                print(f"\tDestination dataset loaded: {destination}")
         except BaseException:
             tiled_dataset = fo.Dataset(destination)
             tiled_dataset.persistent = False if test else True
-            print(f"Destination dataset created (persistent={tiled_dataset.persistent}): {destination}")
+            if log_level >= 2:
+                print(f"\tDestination dataset created (persistent={tiled_dataset.persistent}): {destination}")
 
         save_empty = ctx.params.get("save_empty")
 
@@ -252,6 +264,7 @@ class MakeTiles(foo.Operator):
                 view = []
 
         if test:
+            print(" 🤪\tTestmode!")
             view = view.head(5)
 
         resize = ctx.params.get("resize")
@@ -259,8 +272,12 @@ class MakeTiles(foo.Operator):
         padding = ctx.params.get("padding")
         threshold = ctx.params.get("threshold")
         runs = ctx.params.get("runs")
+        name = ctx.params.get("name")
 
-        print(f"Samples found: {len(view)}")
+        if not name:
+            name = view.dataset if "dataset" in view else view.name
+        if log_level >= 1:
+            print(f" 🚀\tStarting with {len(view)} samples in {name}")
 
         stats = {
             "below_threshold": 0,
@@ -270,10 +287,12 @@ class MakeTiles(foo.Operator):
 
         for sample in view:
             filepath = sample['filepath']
-            print("🌆 "+filepath)
+            if log_level >= 3:
+                print(" 🌆\t"+filepath)
 
             if labels_field and not save_empty and not sample[labels_field]:
-                print(f"   🧐 No {labels_field} detections found: Skiping")
+                if log_level >= 2:
+                    print(f"  🧐\tNo {labels_field} detections found: Skiping")
                 continue
             
             image = cv2.imread(filepath)
@@ -284,33 +303,35 @@ class MakeTiles(foo.Operator):
             if labels_field and sample[labels_field]:
                 labels = sample[labels_field].detections
             else:
-                print(f"   🪚 No {labels_field} detections found")
+                if log_level >= 3:
+                    print(f"  🧐\tNo {labels_field} detections found")
                 labels = None
 
             stat = tile(image, sample.tags, os.path.basename(filepath), sample['id'], labels, output_dir, target=tiled_dataset, tile_size=tile_size, padding=padding, threshold=threshold, save_empty=save_empty, labels_field=labels_field, runs=runs)
 
-
             stats["below_threshold"] += stat["below_threshold"]
             stats["tiles_created"] += stat["tiles_created"]
             stats["intersections"].append(stat["intersection"])
-            print("    🪚 " + str(stat["tiles_created"]) + " tiles. ⌀ " + str(round(stat['intersection'],3)) + " intersection. " + str(stat["below_threshold"]) + " det below threshold.")
+            if log_level >= 2:
+                print(f"  🪚\t{str(stat['tiles_created'])} tiles\t\t⌀ intersection {str(round(stat['intersection'],2))}\t{str(stat['below_threshold'])} detections < threshold. \t{os.path.basename(filepath)}")
 
         samples_total = len(view)
         tiles_per_sample = str(round(stats["tiles_created"]/samples_total, 1))
         below_threshold_per_sample = str(round(stats["below_threshold"]/samples_total, 1))
         tiles_created = str(stats['tiles_created'])
         below_threshold = str(stats["below_threshold"])
-        avg_intersection = round(sum(stats["intersections"]) / samples_total, 3)
+        avg_intersection = str(round(sum(stats["intersections"]) / samples_total, 4))
 
-        print(f"✅ Done with {samples_total} samples.")
-        print(f"    Created {tiles_per_sample} tiles/sample (total: {tiles_created})")
-        print(f"    Lost {below_threshold_per_sample} detections/sample below threshold({str(threshold)}) (total: {below_threshold})")
-        print(f"    Average intersection {avg_intersection}")
+        print(f" ✅\t{name} done with {samples_total} samples")
+        print(f"\tCreated {tiles_per_sample} tiles/sample (total: {tiles_created})")
+        print(f"\tLost {below_threshold_per_sample} detections/sample below threshold({str(threshold)}) (total: {below_threshold})")
+        print(f"\tAverage intersection {avg_intersection}")
 
     def __call__(
         self, 
         sample_collection, 
         output_dir: str, 
+        name: Optional[str] = None,
         destination: Optional[str] = None,
         labels_field: Optional[str] = "ground_truth",
         resize: Optional[int] = None,
@@ -319,12 +340,14 @@ class MakeTiles(foo.Operator):
         threshold: float = 0.15,
         save_empty: bool = False,
         test: bool = False,
-        runs: int = 1
+        runs: int = 1,
+        log_level: int = 2
     ):
         ctx = dict(view=sample_collection.view())
         params = dict(
             target="CURRENT_VIEW",
             output_dir=output_dir,
+            name=name,
             destination=destination,
             labels_field=labels_field,
             resize=resize,
@@ -333,7 +356,8 @@ class MakeTiles(foo.Operator):
             threshold=threshold,
             save_empty=save_empty,
             test=test,
-            runs=runs
+            runs=runs,
+            log_level=log_level
             )
         return foo.execute_operator(self.uri, ctx, params=params)
 
